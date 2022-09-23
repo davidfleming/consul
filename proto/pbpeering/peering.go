@@ -1,9 +1,16 @@
 package pbpeering
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/lib"
@@ -136,15 +143,73 @@ func PeeringStateFromAPI(t api.PeeringState) PeeringState {
 }
 
 func (p *Peering) IsActive() bool {
-	if p != nil && p.State == PeeringState_TERMINATED {
+	if p == nil || p.State == PeeringState_TERMINATED {
 		return false
 	}
-	if p == nil || p.DeletedAt == nil {
+	if p.DeletedAt == nil {
 		return true
 	}
 
 	// The minimum protobuf timestamp is the Unix epoch rather than go's zero.
 	return structs.IsZeroProtoTime(p.DeletedAt)
+}
+
+// Validate is a validation helper that checks whether a secret ID is embedded in the container type.
+func (s *SecretsWriteRequest) Validate() error {
+	if s.PeerID == "" {
+		return errors.New("missing peer ID")
+	}
+	switch r := s.Request.(type) {
+	case *SecretsWriteRequest_GenerateToken:
+		if r != nil && r.GenerateToken.GetEstablishmentSecret() != "" {
+			return nil
+		}
+	case *SecretsWriteRequest_Establish:
+		if r != nil && r.Establish.GetActiveStreamSecret() != "" {
+			return nil
+		}
+	case *SecretsWriteRequest_ExchangeSecret:
+		if r != nil && r.ExchangeSecret.GetPendingStreamSecret() != "" {
+			return nil
+		}
+	case *SecretsWriteRequest_PromotePending:
+		if r != nil && r.PromotePending.GetActiveStreamSecret() != "" {
+			return nil
+		}
+	default:
+		return fmt.Errorf("unexpected request type %T", s.Request)
+	}
+
+	return errors.New("missing secret ID")
+}
+
+// TLSDialOption returns the gRPC DialOption to secure the transport if CAPems
+// ara available. If no CAPems were provided in the peering token then the
+// WithInsecure dial option is returned.
+func (p *Peering) TLSDialOption() (grpc.DialOption, error) {
+	tlsOption := grpc.WithInsecure()
+
+	if len(p.PeerCAPems) > 0 {
+		var haveCerts bool
+		pool := x509.NewCertPool()
+		for _, pem := range p.PeerCAPems {
+			if !pool.AppendCertsFromPEM([]byte(pem)) {
+				return nil, fmt.Errorf("failed to parse PEM %s", pem)
+			}
+			if len(pem) > 0 {
+				haveCerts = true
+			}
+		}
+		if !haveCerts {
+			return nil, fmt.Errorf("failed to build cert pool from peer CA pems")
+		}
+		cfg := tls.Config{
+			ServerName: p.PeerServerName,
+			RootCAs:    pool,
+		}
+		tlsOption = grpc.WithTransportCredentials(credentials.NewTLS(&cfg))
+	}
+	return tlsOption, nil
 }
 
 func (p *Peering) ToAPI() *api.Peering {

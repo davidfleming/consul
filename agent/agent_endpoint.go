@@ -45,7 +45,19 @@ type Self struct {
 
 type XDSSelf struct {
 	SupportedProxies map[string][]string
-	Port             int
+	// Port could be used for either TLS or plain-text communication
+	// up through version 1.14. In order to maintain backwards-compatibility,
+	// Port will now default to TLS and fallback to the standard port value.
+	// DEPRECATED: Use Ports field instead
+	Port  int
+	Ports GRPCPorts
+}
+
+// GRPCPorts is used to hold the external GRPC server's port numbers.
+type GRPCPorts struct {
+	// Technically, this port is not always plain-text as of 1.14, but will be in a future release.
+	Plaintext int
+	TLS       int
 }
 
 func (s *HTTPHandlers) AgentSelf(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
@@ -78,7 +90,16 @@ func (s *HTTPHandlers) AgentSelf(resp http.ResponseWriter, req *http.Request) (i
 			SupportedProxies: map[string][]string{
 				"envoy": proxysupport.EnvoyVersions,
 			},
-			Port: s.agent.config.GRPCPort,
+			// Prefer the TLS port. See comment on the XDSSelf struct for details.
+			Port: s.agent.config.GRPCTLSPort,
+			Ports: GRPCPorts{
+				Plaintext: s.agent.config.GRPCPort,
+				TLS:       s.agent.config.GRPCTLSPort,
+			},
+		}
+		// Fallback to standard port if TLS is not enabled.
+		if s.agent.config.GRPCTLSPort <= 0 {
+			xds.Port = s.agent.config.GRPCPort
 		}
 	}
 
@@ -1123,8 +1144,8 @@ func (s *HTTPHandlers) AgentRegisterService(resp http.ResponseWriter, req *http.
 		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Invalid Service Meta: %v", err)}
 	}
 
-	// Run validation. This is the same validation that would happen on
-	// the catalog endpoint so it helps ensure the sync will work properly.
+	// Run validation. This same validation would happen on the catalog endpoint,
+	// so it helps ensure the sync will work properly.
 	if err := ns.Validate(); err != nil {
 		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Validation failed: %v", err.Error())}
 	}
@@ -1159,12 +1180,12 @@ func (s *HTTPHandlers) AgentRegisterService(resp http.ResponseWriter, req *http.
 	}
 
 	// See if we have a sidecar to register too
-	sidecar, sidecarChecks, sidecarToken, err := s.agent.sidecarServiceFromNodeService(ns, token)
+	sidecar, sidecarChecks, sidecarToken, err := sidecarServiceFromNodeService(ns, token)
 	if err != nil {
 		return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Invalid SidecarService: %s", err)}
 	}
 	if sidecar != nil {
-		if err := sidecar.Validate(); err != nil {
+		if err := sidecar.ValidateForAgent(); err != nil {
 			return nil, HTTPError{StatusCode: http.StatusBadRequest, Reason: fmt.Sprintf("Failed Validation: %v", err.Error())}
 		}
 		// Make sure we are allowed to register the sidecar using the token

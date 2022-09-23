@@ -12,10 +12,12 @@ DEBUG=${DEBUG:-}
 XDS_TARGET=${XDS_TARGET:-server}
 
 # ENVOY_VERSION to run each test against
-ENVOY_VERSION=${ENVOY_VERSION:-"1.23.0"}
+ENVOY_VERSION=${ENVOY_VERSION:-"1.23.1"}
 export ENVOY_VERSION
 
 export DOCKER_BUILDKIT=1
+# Always run tests on amd64 because that's what the CI environment uses.
+export DOCKER_DEFAULT_PLATFORM="linux/amd64"
 
 if [ ! -z "$DEBUG" ] ; then
   set -x
@@ -44,17 +46,20 @@ function network_snippet {
 }
 
 function aws_snippet {
-  local snippet=""
+  LAMBDA_TESTS_ENABLED=${LAMBDA_TESTS_ENABLED:-false}
+  if [ "$LAMBDA_TESTS_ENABLED" != false ]; then
+    local snippet=""
 
-  # The Lambda integration cases assume that a Lambda function exists in $AWS_REGION with an ARN of $AWS_LAMBDA_ARN.
-  # The AWS credentials must have permission to invoke the Lambda function.
-  [ -n "$(set | grep '^AWS_ACCESS_KEY_ID=')" ] && snippet="${snippet} -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
-  [ -n "$(set | grep '^AWS_SECRET_ACCESS_KEY=')" ] && snippet="${snippet} -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
-  [ -n "$(set | grep '^AWS_SESSION_TOKEN=')" ] && snippet="${snippet} -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
-  [ -n "$(set | grep '^AWS_LAMBDA_REGION=')" ] && snippet="${snippet} -e AWS_LAMBDA_REGION=$AWS_LAMBDA_REGION"
-  [ -n "$(set | grep '^AWS_LAMBDA_ARN=')" ] && snippet="${snippet} -e AWS_LAMBDA_ARN=$AWS_LAMBDA_ARN"
+    # The Lambda integration cases assume that a Lambda function exists in $AWS_REGION with an ARN of $AWS_LAMBDA_ARN.
+    # The AWS credentials must have permission to invoke the Lambda function.
+    [ -n "$(set | grep '^AWS_ACCESS_KEY_ID=')" ] && snippet="${snippet} -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+    [ -n "$(set | grep '^AWS_SECRET_ACCESS_KEY=')" ] && snippet="${snippet} -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+    [ -n "$(set | grep '^AWS_SESSION_TOKEN=')" ] && snippet="${snippet} -e AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
+    [ -n "$(set | grep '^AWS_LAMBDA_REGION=')" ] && snippet="${snippet} -e AWS_LAMBDA_REGION=$AWS_LAMBDA_REGION"
+    [ -n "$(set | grep '^AWS_LAMBDA_ARN=')" ] && snippet="${snippet} -e AWS_LAMBDA_ARN=$AWS_LAMBDA_ARN"
 
-  echo "$snippet"
+    echo "$snippet"
+  fi
 }
 
 function init_workdir {
@@ -175,7 +180,7 @@ function start_consul {
   # xDS sessions are served directly by a Consul server, and another in which it
   # goes through a client agent.
   #
-  # This is nessasary because servers and clients source configuration data in
+  # This is necessary because servers and clients source configuration data in
   # different ways (client agents use an RPC-backed cache and servers use their
   # own local data) and we want to catch regressions in both.
   #
@@ -222,7 +227,7 @@ function start_consul {
       --hostname "consul-${DC}-server" \
       --network-alias "consul-${DC}-server" \
       -e "CONSUL_LICENSE=$license" \
-      consul-dev \
+      consul:local \
       agent -dev -datacenter "${DC}" \
       -config-dir "/workdir/${DC}/consul" \
       -config-dir "/workdir/${DC}/consul-server" \
@@ -237,7 +242,7 @@ function start_consul {
       --network-alias "consul-${DC}-client" \
       -e "CONSUL_LICENSE=$license" \
       ${ports[@]} \
-      consul-dev \
+      consul:local \
       agent -datacenter "${DC}" \
       -config-dir "/workdir/${DC}/consul" \
       -data-dir "/tmp/consul" \
@@ -256,7 +261,7 @@ function start_consul {
       --network-alias "consul-${DC}-server" \
       -e "CONSUL_LICENSE=$license" \
       ${ports[@]} \
-      consul-dev \
+      consul:local \
       agent -dev -datacenter "${DC}" \
       -config-dir "/workdir/${DC}/consul" \
       -config-dir "/workdir/${DC}/consul-server" \
@@ -290,7 +295,7 @@ function start_partitioned_client {
     --hostname "consul-${PARTITION}-client" \
     --network-alias "consul-${PARTITION}-client" \
     -e "CONSUL_LICENSE=$license" \
-    consul-dev agent \
+    consul:local agent \
     -datacenter "primary" \
     -retry-join "consul-primary-server" \
     -grpc-port 8502 \
@@ -555,7 +560,7 @@ function suite_setup {
 
     # pre-build the verify container
     echo "Rebuilding 'bats-verify' image..."
-    docker build -t bats-verify -f Dockerfile-bats .
+    retry_default docker build -t bats-verify -f Dockerfile-bats .
 
     # if this fails on CircleCI your first thing to try would be to upgrade
     # the machine image to the latest version using this listing:
@@ -566,13 +571,13 @@ function suite_setup {
 
     # pre-build the consul+envoy container
     echo "Rebuilding 'consul-dev-envoy:${ENVOY_VERSION}' image..."
-    docker build -t consul-dev-envoy:${ENVOY_VERSION} \
+    retry_default docker build -t consul-dev-envoy:${ENVOY_VERSION} \
         --build-arg ENVOY_VERSION=${ENVOY_VERSION} \
         -f Dockerfile-consul-envoy .
 
     # pre-build the test-sds-server container
     echo "Rebuilding 'test-sds-server' image..."
-    docker build -t test-sds-server -f Dockerfile-test-sds-server test-sds-server
+    retry_default docker build -t test-sds-server -f Dockerfile-test-sds-server test-sds-server
 }
 
 function suite_teardown {
@@ -877,7 +882,7 @@ function common_run_container_tcpdump {
 
     # we cant run this in circle but its only here to temporarily enable.
 
-    docker build -t envoy-tcpdump -f Dockerfile-tcpdump .
+    retry_default docker build -t envoy-tcpdump -f Dockerfile-tcpdump .
 
     docker run -d --name $(container_name_prev) \
         $(network_snippet $DC) \

@@ -66,9 +66,13 @@ type TestAgent struct {
 	// and the directory will be removed once the test ends.
 	DataDir string
 
-	// UseTLS, if true, will disable the HTTP port and enable the HTTPS
+	// UseHTTPS, if true, will disable the HTTP port and enable the HTTPS
 	// one.
-	UseTLS bool
+	UseHTTPS bool
+
+	// UseGRPCTLS, if true, will disable the GRPC port and enable the GRPC+TLS
+	// one.
+	UseGRPCTLS bool
 
 	// dns is a reference to the first started DNS endpoint.
 	// It is valid after Start().
@@ -138,6 +142,9 @@ func TestConfigHCL(nodeID string) string {
 		}
 		performance {
 			raft_multiplier = 1
+		}
+		peering {
+			enabled = true
 		}`, nodeID, connect.TestClusterID,
 	)
 }
@@ -180,7 +187,7 @@ func (a *TestAgent) Start(t *testing.T) error {
 		Name:       name,
 	})
 
-	portsConfig := randomPortsSource(t, a.UseTLS)
+	portsConfig := randomPortsSource(t, a.UseHTTPS, a.UseGRPCTLS)
 
 	// Create NodeID outside the closure, so that it does not change
 	testHCLConfig := TestConfigHCL(NodeID())
@@ -398,16 +405,25 @@ func (a *TestAgent) consulConfig() *consul.Config {
 // chance of port conflicts for concurrently executed test binaries.
 // Instead of relying on one set of ports to be sufficient we retry
 // starting the agent with different ports on port conflict.
-func randomPortsSource(t *testing.T, tls bool) string {
-	ports := freeport.GetN(t, 7)
+func randomPortsSource(t *testing.T, useHTTPS bool, useGRPCTLS bool) string {
+	ports := freeport.GetN(t, 8)
 
 	var http, https int
-	if tls {
+	if useHTTPS {
 		http = -1
 		https = ports[2]
 	} else {
 		http = ports[1]
 		https = -1
+	}
+
+	var grpc, grpcTLS int
+	if useGRPCTLS {
+		grpc = -1
+		grpcTLS = ports[7]
+	} else {
+		grpc = ports[6]
+		grpcTLS = -1
 	}
 
 	return `
@@ -418,7 +434,8 @@ func randomPortsSource(t *testing.T, tls bool) string {
 			serf_lan = ` + strconv.Itoa(ports[3]) + `
 			serf_wan = ` + strconv.Itoa(ports[4]) + `
 			server = ` + strconv.Itoa(ports[5]) + `
-			grpc = ` + strconv.Itoa(ports[6]) + `
+			grpc = ` + strconv.Itoa(grpc) + `
+			grpc_tls = ` + strconv.Itoa(grpcTLS) + `
 		}
 	`
 }
@@ -474,6 +491,9 @@ func TestConfig(logger hclog.Logger, sources ...config.Source) *config.RuntimeCo
 	// to make test deterministic. 0 results in default jitter being applied but a
 	// tiny delay is effectively thre same.
 	cfg.ConnectTestCALeafRootChangeSpread = 1 * time.Nanosecond
+
+	// allows registering objects with the PeerName
+	cfg.PeeringTestAllowPeerRegistrations = true
 
 	return cfg
 }

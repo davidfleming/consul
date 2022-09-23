@@ -133,6 +133,9 @@ type Config struct {
 	// GRPCPort is the port the public gRPC server listens on.
 	GRPCPort int
 
+	// GRPCTLSPort is the port the public gRPC TLS server listens on.
+	GRPCTLSPort int
+
 	// (Enterprise-only) The network segment this agent is part of.
 	Segment string
 
@@ -399,6 +402,8 @@ type Config struct {
 	// PeeringEnabled enables cluster peering.
 	PeeringEnabled bool
 
+	PeeringTestAllowPeerRegistrations bool
+
 	// Embedded Consul Enterprise specific configuration
 	*EnterpriseConfig
 }
@@ -515,7 +520,7 @@ func DefaultConfig() *Config {
 		DefaultQueryTime:         300 * time.Second,
 		MaxQueryTime:             600 * time.Second,
 
-		PeeringEnabled: true,
+		PeeringTestAllowPeerRegistrations: false,
 
 		EnterpriseConfig: DefaultEnterpriseConfig(),
 	}
@@ -582,6 +587,7 @@ func CloneSerfLANConfig(base *serf.Config) *serf.Config {
 	cfg.MemberlistConfig.ProbeTimeout = base.MemberlistConfig.ProbeTimeout
 	cfg.MemberlistConfig.SuspicionMult = base.MemberlistConfig.SuspicionMult
 	cfg.MemberlistConfig.RetransmitMult = base.MemberlistConfig.RetransmitMult
+	cfg.MemberlistConfig.MetricLabels = base.MemberlistConfig.MetricLabels
 
 	// agent/keyring.go
 	cfg.MemberlistConfig.Keyring = base.MemberlistConfig.Keyring
@@ -591,6 +597,7 @@ func CloneSerfLANConfig(base *serf.Config) *serf.Config {
 	cfg.ReapInterval = base.ReapInterval
 	cfg.TombstoneTimeout = base.TombstoneTimeout
 	cfg.MemberlistConfig.SecretKey = base.MemberlistConfig.SecretKey
+	cfg.MetricLabels = base.MetricLabels
 
 	return cfg
 }

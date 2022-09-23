@@ -84,6 +84,7 @@ const (
 	PeeringTerminateByIDType                    = 37
 	PeeringTrustBundleWriteType                 = 38
 	PeeringTrustBundleDeleteType                = 39
+	PeeringSecretsWriteType                     = 40
 )
 
 const (
@@ -149,6 +150,7 @@ var requestTypeStrings = map[MessageType]string{
 	PeeringDeleteType:               "PeeringDelete",
 	PeeringTrustBundleWriteType:     "PeeringTrustBundle",
 	PeeringTrustBundleDeleteType:    "PeeringTrustBundleDelete",
+	PeeringSecretsWriteType:         "PeeringSecret",
 }
 
 const (
@@ -351,7 +353,7 @@ func (q QueryOptions) Timeout(rpcHoldTimeout, maxQueryTime, defaultQueryTime tim
 			q.MaxQueryTime = defaultQueryTime
 		}
 		// Timeout after maximum jitter has elapsed.
-		q.MaxQueryTime += lib.RandomStagger(q.MaxQueryTime / JitterFraction)
+		q.MaxQueryTime += q.MaxQueryTime / JitterFraction
 
 		return q.MaxQueryTime + rpcHoldTimeout
 	}
@@ -1255,8 +1257,9 @@ type NodeService struct {
 	// a pointer so that we never have to nil-check this.
 	Connect ServiceConnect
 
+	// TODO: rename to reflect that this is used to express future intent to register.
 	// LocallyRegisteredAsSidecar is private as it is only used by a local agent
-	// state to track if the service was registered from a nested sidecar_service
+	// state to track if the service was or will be registered from a nested sidecar_service
 	// block. We need to track that so we can know whether we need to deregister
 	// it automatically too if it's removed from the service definition or if the
 	// parent service is deregistered. Relying only on ID would cause us to
@@ -1411,6 +1414,27 @@ func (s *NodeService) IsGateway() bool {
 func (s *NodeService) Validate() error {
 	var result error
 
+	if s.Kind == ServiceKindConnectProxy {
+		if s.Port == 0 && s.SocketPath == "" {
+			result = multierror.Append(result, fmt.Errorf("Port or SocketPath must be set for a %s", s.Kind))
+		}
+	}
+
+	commonValidation := s.ValidateForAgent()
+	if commonValidation != nil {
+		result = multierror.Append(result, commonValidation)
+	}
+
+	return result
+}
+
+// ValidateForAgent does a subset validation, with the assumption that a local agent can assist with missing values.
+//
+// I.e. in the catalog case, a local agent cannot be assumed to facilitate auto-assignment of port or socket path,
+// so additional checks are needed.
+func (s *NodeService) ValidateForAgent() error {
+	var result error
+
 	// TODO(partitions): remember to double check that this doesn't cross partition boundaries
 
 	// ConnectProxy validation
@@ -1424,10 +1448,6 @@ func (s *NodeService) Validate() error {
 			result = multierror.Append(result, fmt.Errorf(
 				"Proxy.DestinationServiceName must not be a wildcard for Connect proxy "+
 					"services"))
-		}
-
-		if s.Port == 0 && s.SocketPath == "" {
-			result = multierror.Append(result, fmt.Errorf("Port or SocketPath must be set for a %s", s.Kind))
 		}
 
 		if s.Connect.Native {
@@ -2192,8 +2212,8 @@ type PeeredServiceName struct {
 }
 
 type ServiceName struct {
-	Name string
-	acl.EnterpriseMeta
+	Name               string
+	acl.EnterpriseMeta `mapstructure:",squash"`
 }
 
 func NewServiceName(name string, entMeta *acl.EnterpriseMeta) ServiceName {

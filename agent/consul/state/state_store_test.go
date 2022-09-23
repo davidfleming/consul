@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/agent/structs"
+	"github.com/hashicorp/consul/proto/pbpeering"
 	"github.com/hashicorp/consul/types"
 )
 
@@ -55,6 +57,16 @@ func testStateStore(t *testing.T) *Store {
 		t.Fatalf("missing state store")
 	}
 	return s
+}
+
+// testRegisterPeering registers a peering into the state store.
+func testRegisterPeering(t *testing.T, s *Store, idx uint64, name string) *pbpeering.Peering {
+	uuid, err := uuid.GenerateUUID()
+	require.NoError(t, err)
+	peering := &pbpeering.Peering{Name: name, ID: uuid}
+	err = s.PeeringWrite(idx, &pbpeering.PeeringWriteRequest{Peering: peering})
+	require.NoError(t, err)
+	return peering
 }
 
 // testRegisterNode registers a node into the state store.
@@ -134,13 +146,13 @@ func testRegisterServiceOpts(t *testing.T, s *Store, idx uint64, nodeID, service
 // testRegisterServiceWithChange registers a service and allow ensuring the consul index is updated
 // even if service already exists if using `modifyAccordingIndex`.
 // This is done by setting the transaction ID in "version" meta so service will be updated if it already exists
-func testRegisterServiceWithChange(t *testing.T, s *Store, idx uint64, nodeID, serviceID string, modifyAccordingIndex bool) {
-	testRegisterServiceWithChangeOpts(t, s, idx, nodeID, serviceID, modifyAccordingIndex)
+func testRegisterServiceWithChange(t *testing.T, s *Store, idx uint64, nodeID, serviceID string, modifyAccordingIndex bool) *structs.NodeService {
+	return testRegisterServiceWithChangeOpts(t, s, idx, nodeID, serviceID, modifyAccordingIndex)
 }
 
 // testRegisterServiceWithChangeOpts is the same as testRegisterServiceWithChange with the addition of opts that can
 // modify the service prior to writing.
-func testRegisterServiceWithChangeOpts(t *testing.T, s *Store, idx uint64, nodeID, serviceID string, modifyAccordingIndex bool, opts ...func(service *structs.NodeService)) {
+func testRegisterServiceWithChangeOpts(t *testing.T, s *Store, idx uint64, nodeID, serviceID string, modifyAccordingIndex bool, opts ...func(service *structs.NodeService)) *structs.NodeService {
 	meta := make(map[string]string)
 	if modifyAccordingIndex {
 		meta["version"] = fmt.Sprint(idx)
@@ -171,14 +183,21 @@ func testRegisterServiceWithChangeOpts(t *testing.T, s *Store, idx uint64, nodeI
 		result.ServiceID != serviceID {
 		t.Fatalf("bad service: %#v", result)
 	}
+	return svc
 }
 
 // testRegisterService register a service with given transaction idx
 // If the service already exists, transaction number might not be increased
 // Use `testRegisterServiceWithChange()` if you want perform a registration that
 // ensures the transaction is updated by setting idx in Meta of Service
-func testRegisterService(t *testing.T, s *Store, idx uint64, nodeID, serviceID string) {
-	testRegisterServiceWithChange(t, s, idx, nodeID, serviceID, false)
+func testRegisterService(t *testing.T, s *Store, idx uint64, nodeID, serviceID string) *structs.NodeService {
+	return testRegisterServiceWithChange(t, s, idx, nodeID, serviceID, false)
+}
+
+func testRegisterConnectService(t *testing.T, s *Store, idx uint64, nodeID, serviceID string) {
+	testRegisterServiceWithChangeOpts(t, s, idx, nodeID, serviceID, true, func(service *structs.NodeService) {
+		service.Connect = structs.ServiceConnect{Native: true}
+	})
 }
 
 func testRegisterIngressService(t *testing.T, s *Store, idx uint64, nodeID, serviceID string) {

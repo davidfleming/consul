@@ -1523,6 +1523,45 @@ func TestCatalog_ListServices_NodeMetaFilter(t *testing.T) {
 	}
 }
 
+func TestCatalog_ListServices_Filter(t *testing.T) {
+	t.Parallel()
+	_, s1 := testServer(t)
+	codec := rpcClient(t, s1)
+
+	testrpc.WaitForTestAgent(t, s1.RPC, "dc1")
+
+	// prep the cluster with some data we can use in our filters
+	registerTestCatalogEntries(t, codec)
+
+	// Run the tests against the test server
+
+	t.Run("ListServices", func(t *testing.T) {
+		args := structs.DCSpecificRequest{
+			Datacenter: "dc1",
+		}
+
+		args.Filter = "ServiceName == redis"
+		out := new(structs.IndexedServices)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Catalog.ListServices", &args, out))
+		require.Contains(t, out.Services, "redis")
+		require.ElementsMatch(t, []string{"v1", "v2"}, out.Services["redis"])
+
+		args.Filter = "NodeMeta.os == NoSuchOS"
+		out = new(structs.IndexedServices)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Catalog.ListServices", &args, out))
+		require.Len(t, out.Services, 0)
+
+		args.Filter = "NodeMeta.NoSuchMetadata == linux"
+		out = new(structs.IndexedServices)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Catalog.ListServices", &args, out))
+		require.Len(t, out.Services, 0)
+
+		args.Filter = "InvalidField == linux"
+		out = new(structs.IndexedServices)
+		require.Error(t, msgpackrpc.CallWithCodec(codec, "Catalog.ListServices", &args, out))
+	})
+}
+
 func TestCatalog_ListServices_Blocking(t *testing.T) {
 	if testing.Short() {
 		t.Skip("too slow for testing.Short")
@@ -2763,6 +2802,104 @@ node_prefix "" {
 		t.Fatalf("err: %s", err)
 	}
 	return
+}
+
+// TestCatalog_Register_DenyPeeringRegistration makes sure that users cannot send structs.RegisterRequest
+// with a PeerName in any part of the request.
+func TestCatalog_Register_DenyPeeringRegistration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("too slow for testing.Short")
+	}
+
+	t.Parallel()
+	_, s := testServerWithConfig(t)
+	codec := rpcClient(t, s)
+
+	// we will add PeerName to copies of arg
+	arg := structs.RegisterRequest{
+		Datacenter: "dc1",
+		Node:       "foo",
+		Address:    "127.0.0.1",
+		Service: &structs.NodeService{
+			Service: "db",
+			Tags:    []string{"primary"},
+			Port:    8000,
+		},
+		Check: &structs.HealthCheck{
+			CheckID:   types.CheckID("db-check"),
+			ServiceID: "db",
+		},
+		Checks: structs.HealthChecks{
+			&structs.HealthCheck{
+				CheckID:   types.CheckID("db-check"),
+				ServiceID: "db",
+			},
+		},
+	}
+
+	type testcase struct {
+		name      string
+		reqCopyFn func(arg *structs.RegisterRequest) structs.RegisterRequest
+	}
+
+	testCases := []testcase{
+		{
+			name: "peer name on top level",
+			reqCopyFn: func(arg *structs.RegisterRequest) structs.RegisterRequest {
+				copyR := *arg
+				copyR.PeerName = "foo"
+				return copyR
+			},
+		},
+		{
+			name: "peer name in service",
+			reqCopyFn: func(arg *structs.RegisterRequest) structs.RegisterRequest {
+				copyR := *arg
+				copyR.Service.PeerName = "foo"
+				return copyR
+			},
+		},
+		{
+			name: "peer name in check",
+			reqCopyFn: func(arg *structs.RegisterRequest) structs.RegisterRequest {
+				copyR := *arg
+				copyR.Check.PeerName = "foo"
+				return copyR
+			},
+		},
+		{
+			name: "peer name in checks",
+			reqCopyFn: func(arg *structs.RegisterRequest) structs.RegisterRequest {
+				copyR := *arg
+				copyR.Checks[0].PeerName = "foo"
+				return copyR
+			},
+		},
+		{
+			name: "peer name everywhere",
+			reqCopyFn: func(arg *structs.RegisterRequest) structs.RegisterRequest {
+				copyR := *arg
+
+				copyR.PeerName = "foo1"
+				copyR.Service.PeerName = "foo2"
+				copyR.Check.PeerName = "foo3"
+				copyR.Checks[0].PeerName = "foo4"
+				return copyR
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.reqCopyFn(&arg)
+
+			var out struct{}
+			err := msgpackrpc.CallWithCodec(codec, "Catalog.Register", &req, &out)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "cannot register requests with PeerName in them")
+		})
+	}
+
 }
 
 func TestCatalog_ListServices_FilterACL(t *testing.T) {

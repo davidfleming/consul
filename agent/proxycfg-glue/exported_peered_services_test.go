@@ -4,13 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/hashicorp/consul/agent/consul/state"
 	"github.com/hashicorp/consul/agent/proxycfg"
 	"github.com/hashicorp/consul/agent/structs"
 	"github.com/hashicorp/consul/proto/pbpeering"
 	"github.com/hashicorp/consul/sdk/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServerExportedPeeredServices(t *testing.T) {
@@ -22,10 +21,12 @@ func TestServerExportedPeeredServices(t *testing.T) {
 	store := state.NewStateStore(nil)
 
 	for _, peer := range []string{"peer-1", "peer-2", "peer-3"} {
-		require.NoError(t, store.PeeringWrite(nextIndex(), &pbpeering.Peering{
-			ID:    testUUID(t),
-			Name:  peer,
-			State: pbpeering.PeeringState_ACTIVE,
+		require.NoError(t, store.PeeringWrite(nextIndex(), &pbpeering.PeeringWriteRequest{
+			Peering: &pbpeering.Peering{
+				ID:    testUUID(t),
+				Name:  peer,
+				State: pbpeering.PeeringState_ACTIVE,
+			},
 		}))
 	}
 
