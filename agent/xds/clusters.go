@@ -396,6 +396,30 @@ func (s *ResourceGenerator) clustersFromSnapshotMeshGateway(cfgSnap *proxycfg.Co
 		}
 	}
 
+	// Create a single cluster for local servers to be dialed by peers.
+	// When peering through gateways we load balance across the local servers. They cannot be addressed individually.
+	if cfg := cfgSnap.MeshConfig(); cfg != nil && cfg.Peering != nil && cfg.Peering.PeerThroughMeshGateways {
+		servers, _ := cfgSnap.MeshGateway.WatchedConsulServers.Get(structs.ConsulServiceName)
+
+		hasVoters := false
+		for _, srv := range servers {
+			if isReplica := srv.Service.Meta["read_replica"]; isReplica == "true" {
+				// Peering control-plane traffic can only ever be handled by the local leader.
+				// We avoid routing to read replicas since they will never be Raft voters.
+				continue
+			}
+			hasVoters = true
+			break
+		}
+
+		if hasVoters {
+			cluster := s.makeGatewayCluster(cfgSnap, clusterOpts{
+				name: connect.PeeringServerSAN(cfgSnap.Datacenter, cfgSnap.Roots.TrustDomain),
+			})
+			clusters = append(clusters, cluster)
+		}
+	}
+
 	// generate the per-service/subset clusters
 	c, err := s.makeGatewayServiceClusters(cfgSnap, cfgSnap.MeshGateway.ServiceGroups, cfgSnap.MeshGateway.ServiceResolvers)
 	if err != nil {
