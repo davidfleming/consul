@@ -2,6 +2,7 @@ package peering_test
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-uuid"
 	"github.com/stretchr/testify/require"
@@ -62,6 +64,7 @@ func generateTooManyMetaKeys() map[string]string {
 
 func TestPeeringService_GenerateToken(t *testing.T) {
 	dir := testutil.TempDir(t, "consul")
+
 	signer, _, _ := tlsutil.GeneratePrivateKey()
 	ca, _, _ := tlsutil.GenerateCA(tlsutil.CAOpts{Signer: signer})
 	cafile := path.Join(dir, "cacert.pem")
@@ -97,10 +100,14 @@ func TestPeeringService_GenerateToken(t *testing.T) {
 
 		token := &structs.PeeringToken{}
 		require.NoError(t, json.Unmarshal(tokenJSON, token))
-		require.Equal(t, "server.dc1.consul", token.ServerName)
+		require.Equal(t, "server.dc1.peering.11111111-2222-3333-4444-555555555555.consul", token.ServerName)
 		require.Len(t, token.ServerAddresses, 1)
 		require.Equal(t, s.PublicGRPCAddr, token.ServerAddresses[0])
-		require.Equal(t, []string{ca}, token.CA)
+
+		// The roots utilized should be the ConnectCA roots and not the ones manually configured.
+		_, roots, err := s.Server.FSM().State().CARoots(nil)
+		require.NoError(t, err)
+		require.Equal(t, []string{roots.Active().RootCert}, token.CA)
 
 		require.NotEmpty(t, token.EstablishmentSecret)
 		secret = token.EstablishmentSecret
@@ -165,6 +172,7 @@ func TestPeeringService_GenerateToken(t *testing.T) {
 
 func TestPeeringService_GenerateTokenExternalAddress(t *testing.T) {
 	dir := testutil.TempDir(t, "consul")
+
 	signer, _, _ := tlsutil.GeneratePrivateKey()
 	ca, _, _ := tlsutil.GenerateCA(tlsutil.CAOpts{Signer: signer})
 	cafile := path.Join(dir, "cacert.pem")
@@ -191,10 +199,14 @@ func TestPeeringService_GenerateTokenExternalAddress(t *testing.T) {
 
 	token := &structs.PeeringToken{}
 	require.NoError(t, json.Unmarshal(tokenJSON, token))
-	require.Equal(t, "server.dc1.consul", token.ServerName)
+	require.Equal(t, "server.dc1.peering.11111111-2222-3333-4444-555555555555.consul", token.ServerName)
 	require.Len(t, token.ServerAddresses, 1)
 	require.Equal(t, externalAddress, token.ServerAddresses[0])
-	require.Equal(t, []string{ca}, token.CA)
+
+	// The roots utilized should be the ConnectCA roots and not the ones manually configured.
+	_, roots, err := s.Server.FSM().State().CARoots(nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{roots.Active().RootCert}, token.CA)
 }
 
 func TestPeeringService_GenerateToken_ACLEnforcement(t *testing.T) {
@@ -382,9 +394,13 @@ func TestPeeringService_Establish_serverNameConflict(t *testing.T) {
 	// Manufacture token to have the same server name but a PeerID not in the store.
 	id, err := uuid.GenerateUUID()
 	require.NoError(t, err, "could not generate uuid")
+
+	serverName, _, err := s.Server.GetPeeringBackend().GetTLSMaterials()
+	require.NoError(t, err)
+
 	peeringToken := structs.PeeringToken{
 		ServerAddresses:     []string{"1.2.3.4:8502"},
-		ServerName:          s.Server.GetPeeringBackend().GetServerName(),
+		ServerName:          serverName,
 		EstablishmentSecret: "foo",
 		PeerID:              id,
 	}
@@ -406,12 +422,16 @@ func TestPeeringService_Establish_serverNameConflict(t *testing.T) {
 
 func TestPeeringService_Establish(t *testing.T) {
 	// TODO(peering): see note on newTestServer, refactor to not use this
-	s1 := newTestServer(t, nil)
+	s1 := newTestServer(t, func(conf *consul.Config) {
+		conf.NodeName = "s1"
+		conf.GRPCTLSPort = 5302
+	})
 	client1 := pbpeering.NewPeeringServiceClient(s1.ClientConn(t))
 
 	s2 := newTestServer(t, func(conf *consul.Config) {
+		conf.NodeName = "s2"
 		conf.Datacenter = "dc2"
-		conf.GRPCPort = 5301
+		conf.PrimaryDatacenter = "dc2"
 	})
 	client2 := pbpeering.NewPeeringServiceClient(s2.ClientConn(t))
 
@@ -427,8 +447,10 @@ func TestPeeringService_Establish(t *testing.T) {
 
 	var peerID string
 	testutil.RunStep(t, "peering can be established from token", func(t *testing.T) {
-		_, err = client2.Establish(ctx, &pbpeering.EstablishRequest{PeerName: "my-peer-s1", PeeringToken: tokenResp.PeeringToken})
-		require.NoError(t, err)
+		retry.Run(t, func(r *retry.R) {
+			_, err = client2.Establish(ctx, &pbpeering.EstablishRequest{PeerName: "my-peer-s1", PeeringToken: tokenResp.PeeringToken})
+			require.NoError(r, err)
+		})
 
 		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		t.Cleanup(cancel)
@@ -1342,6 +1364,7 @@ func newTestServer(t *testing.T, cb func(conf *consul.Config)) testingServer {
 	conf.RaftConfig.LeaderLeaseTimeout = 100 * time.Millisecond
 	conf.RaftConfig.HeartbeatTimeout = 200 * time.Millisecond
 	conf.TLSConfig.Domain = "consul"
+	conf.TLSConfig.GRPC.UseAutoCert = true
 
 	conf.SerfLANConfig.MemberlistConfig.BindAddr = "127.0.0.1"
 	conf.SerfLANConfig.MemberlistConfig.BindPort = ports[1]
@@ -1353,6 +1376,17 @@ func newTestServer(t *testing.T, cb func(conf *consul.Config)) testingServer {
 	conf.PrimaryDatacenter = "dc1"
 	conf.ConnectEnabled = true
 
+	ca := connect.TestCA(t, nil)
+	conf.CAConfig = &structs.CAConfiguration{
+		ClusterID: connect.TestClusterID,
+		Provider:  structs.ConsulCAProvider,
+		Config: map[string]interface{}{
+			"PrivateKey":          ca.SigningKey,
+			"RootCert":            ca.RootCert,
+			"LeafCertTTL":         "72h",
+			"IntermediateCertTTL": "288h",
+		},
+	}
 	conf.GRPCPort = ports[3]
 
 	nodeID, err := uuid.GenerateUUID()
@@ -1372,21 +1406,33 @@ func newTestServer(t *testing.T, cb func(conf *consul.Config)) testingServer {
 	conf.ACLResolverSettings.Datacenter = conf.Datacenter
 	conf.ACLResolverSettings.EnterpriseMeta = *conf.AgentEnterpriseMeta()
 
-	externalGRPCServer := gogrpc.NewServer()
-
 	deps := newDefaultDeps(t, conf)
+	externalGRPCServer := external.NewServer(deps.Logger)
+
 	server, err := consul.NewServer(conf, deps, externalGRPCServer)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, server.Shutdown())
 	})
 
+	require.NoError(t, deps.TLSConfigurator.UpdateAutoTLSCert(connect.TestServerLeaf(t, "dc1", ca)))
+	deps.TLSConfigurator.UpdateAutoTLSPeeringServerName(connect.PeeringServerSAN("dc1", connect.TestTrustDomain))
+
 	// Normally the gRPC server listener is created at the agent level and
 	// passed down into the Server creation.
-	grpcAddr := fmt.Sprintf("127.0.0.1:%d", conf.GRPCPort)
+	port := conf.GRPCPort
+	if conf.GRPCTLSPort > 0 {
+		port = conf.GRPCTLSPort
+	}
+	grpcAddr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	ln, err := net.Listen("tcp", grpcAddr)
 	require.NoError(t, err)
+
+	if conf.GRPCTLSPort > 0 {
+		ln = tls.NewListener(ln, deps.TLSConfigurator.IncomingGRPCConfig())
+		require.NoError(t, err)
+	}
 	go func() {
 		_ = externalGRPCServer.Serve(ln)
 	}()

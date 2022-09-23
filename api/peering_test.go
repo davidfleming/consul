@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/sdk/freeport"
 	"github.com/stretchr/testify/require"
 
 	"github.com/hashicorp/consul/sdk/testutil"
@@ -42,7 +43,7 @@ func TestAPI_Peering_ACLDeny(t *testing.T) {
 		serverConfig.ACL.Tokens.InitialManagement = "root"
 		serverConfig.ACL.Enabled = true
 		serverConfig.ACL.DefaultPolicy = "deny"
-		serverConfig.Ports.GRPC = 5300
+		serverConfig.Ports.GRPCTLS = 5300
 	})
 	defer s1.Stop()
 
@@ -50,7 +51,7 @@ func TestAPI_Peering_ACLDeny(t *testing.T) {
 		serverConfig.ACL.Tokens.InitialManagement = "root"
 		serverConfig.ACL.Enabled = true
 		serverConfig.ACL.DefaultPolicy = "deny"
-		serverConfig.Ports.GRPC = 5301
+		serverConfig.Ports.GRPCTLS = 5301
 		serverConfig.Datacenter = "dc2"
 	})
 	defer s2.Stop()
@@ -263,7 +264,9 @@ func TestAPI_Peering_GenerateToken_ExternalAddresses(t *testing.T) {
 func TestAPI_Peering_GenerateToken_Read_Establish_Delete(t *testing.T) {
 	t.Parallel()
 
-	c, s := makeClient(t) // this is "dc1"
+	c, s := makeClientWithConfig(t, nil, func(conf *testutil.TestServerConfig) {
+		conf.Ports.GRPCTLS = freeport.GetOne(t)
+	}) // this is "dc1"
 	defer s.Stop()
 	s.WaitForSerfCheck(t)
 

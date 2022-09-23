@@ -9,10 +9,12 @@ import (
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/acl/resolver"
+	"github.com/hashicorp/consul/agent/connect"
 	"github.com/hashicorp/consul/agent/consul/stream"
 	"github.com/hashicorp/consul/agent/grpc-external/services/peerstream"
 	"github.com/hashicorp/consul/agent/rpc/peering"
 	"github.com/hashicorp/consul/agent/structs"
+	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/proto/pbpeering"
 )
 
@@ -51,6 +53,31 @@ func (b *PeeringBackend) GetLeaderAddress() string {
 	return b.leaderAddr
 }
 
+// GetTLSMaterials returns the TLS materials for the dialer to dial the acceptor using TLS.
+// It returns the server name to validate, and the CA certificate to validate with.
+func (b *PeeringBackend) GetTLSMaterials() (string, []string, error) {
+	if !b.srv.config.ConnectEnabled {
+		serverName := b.srv.tlsConfigurator.ServerSNI(b.srv.config.Datacenter, "")
+		caPems := b.srv.tlsConfigurator.GRPCManualCAPems()
+
+		return serverName, caPems, nil
+	}
+
+	roots, err := b.srv.getCARoots(nil, b.srv.fsm.State())
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to fetch roots: %w", err)
+	}
+
+	serverName := connect.PeeringServerSAN(b.srv.config.Datacenter, roots.TrustDomain)
+
+	var caPems []string
+	for _, r := range roots.Roots {
+		caPems = append(caPems, lib.EnsureTrailingNewline(r.RootCert))
+	}
+
+	return serverName, caPems, nil
+}
+
 // GetAgentCACertificates gets the server's raw CA data from its TLS Configurator.
 func (b *PeeringBackend) GetAgentCACertificates() ([]string, error) {
 	// TODO(peering): handle empty CA pems
@@ -84,12 +111,6 @@ func (b *PeeringBackend) GetServerAddresses() ([]string, error) {
 		return nil, fmt.Errorf("a grpc bind port must be specified in the configuration for all servers")
 	}
 	return addrs, nil
-}
-
-// GetServerName returns the SNI to be returned in the peering token data which
-// will be used by peers when establishing peering connections over TLS.
-func (b *PeeringBackend) GetServerName() string {
-	return b.srv.tlsConfigurator.ServerSNI(b.srv.config.Datacenter, "")
 }
 
 // EncodeToken encodes a peering token as a bas64-encoded representation of JSON (for now).

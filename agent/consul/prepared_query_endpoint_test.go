@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/agent/connect"
+	"github.com/hashicorp/consul/sdk/freeport"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/serf/coordinate"
 	"github.com/stretchr/testify/assert"
@@ -1463,10 +1465,21 @@ func TestPreparedQuery_Execute(t *testing.T) {
 
 	s2.tokens.UpdateReplicationToken("root", tokenStore.TokenSourceConfig)
 
+	ca := connect.TestCA(t, nil)
+
 	dir3, s3 := testServerWithConfig(t, func(c *Config) {
 		c.Datacenter = "dc3"
 		c.PrimaryDatacenter = "dc3"
 		c.NodeName = "acceptingServer.dc3"
+		c.GRPCTLSPort = freeport.GetOne(t)
+		c.CAConfig = &structs.CAConfiguration{
+			ClusterID: connect.TestClusterID,
+			Provider:  structs.ConsulCAProvider,
+			Config: map[string]interface{}{
+				"PrivateKey": ca.SigningKey,
+				"RootCert":   ca.RootCert,
+			},
+		}
 	})
 	defer os.RemoveAll(dir3)
 	defer s3.Shutdown()

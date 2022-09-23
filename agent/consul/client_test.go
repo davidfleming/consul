@@ -512,7 +512,7 @@ func newDefaultDeps(t *testing.T, c *Config) Deps {
 
 	logger := hclog.NewInterceptLogger(&hclog.LoggerOptions{
 		Name:   c.NodeName,
-		Level:  testutil.TestLogLevel,
+		Level:  hclog.Trace,
 		Output: testutil.NewLogBuffer(t),
 	})
 
