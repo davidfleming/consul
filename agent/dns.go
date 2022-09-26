@@ -60,6 +60,12 @@ const (
 	staleCounterThreshold = 5 * time.Second
 
 	defaultMaxUDPSize = 512
+
+	// If a consumer sets a buffer size greater than this amount we will default it down
+	// to this amount to ensure that consul does respond. Previously if consumer had a larger buffer
+	// size than 65535 - 68 bytes(for header) consul would fail to respond and the consumer timesout
+	// the request.
+	maxUDPDatagramSize = 65475
 )
 
 type dnsSOAConfig struct {
@@ -493,6 +499,15 @@ func (d *DNSServer) handleQuery(resp dns.ResponseWriter, req *dns.Msg) {
 		network = "tcp"
 	}
 
+	// If the network of the local addr is configured to a different protocol we should
+	// swap to the local configuration. For DNS proxying to consul-dataplane the
+	// protocol will always be tcp (gRPC) but the proxied request can specify UDP.
+	// This logic will fallback to whatever was configured in the local addr when
+	// the resp buffer was setup.
+	if network != resp.LocalAddr().Network() {
+		network = resp.LocalAddr().Network()
+	}
+
 	cfg := d.config.Load().(*dnsConfig)
 
 	// Setup the message response //moved
@@ -535,9 +550,8 @@ func (d *DNSServer) handleQuery(resp dns.ResponseWriter, req *dns.Msg) {
 	d.trimDNSResponse(cfg, network, req, m)
 
 	if err := resp.WriteMsg(m); err != nil {
-		d.logger.Warn("failed to respond", "error", err)
+		d.logger.Warn("failed to respond", "error", err, "length", m.Len())
 	}
-	d.logger.Info("I responded :( ")
 }
 
 func (d *DNSServer) soa(cfg *dnsConfig, questionName string) *dns.SOA {
@@ -1257,6 +1271,11 @@ func trimUDPResponse(req, resp *dns.Msg, udpAnswerLimit int) (trimmed bool) {
 			maxSize = int(size)
 		}
 	}
+	// Overriding maxSize as the maxSize cannot be larger than the
+	// maxUDPDatagram size. Reliability guarantees disappear > than this amount.
+	if maxSize > maxUDPDatagramSize {
+		maxSize = maxUDPDatagramSize
+	}
 
 	// We avoid some function calls and allocations by only handling the
 	// extra data when necessary.
@@ -1285,8 +1304,9 @@ func trimUDPResponse(req, resp *dns.Msg, udpAnswerLimit int) (trimmed bool) {
 	// will allow our responses to be compliant even if some downstream server
 	// uncompresses them.
 	// Even when size is too big for one single record, try to send it anyway
-	// (useful for 512 bytes messages)
-	for len(resp.Answer) > 1 && resp.Len() > maxSize-7 {
+	// (useful for 512 bytes messages). The maxSize is 2^16 (max UDP datagram size)
+	// - 68 bytes (60 for the IP header and 8 for the UDP header).
+	for len(resp.Answer) > 1 && resp.Len() > maxSize {
 		// first try to remove the NS section may be it will truncate enough
 		if len(resp.Ns) != 0 {
 			resp.Ns = []dns.RR{}

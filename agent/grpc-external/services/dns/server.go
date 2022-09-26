@@ -12,10 +12,15 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
+type Local struct {
+	IP   net.IP
+	Port int
+}
+
 type Config struct {
 	Logger       hclog.Logger
 	DNSServeMux  *dns.ServeMux
-	LocalAddress net.Addr
+	LocalAddress Local
 }
 
 type Server struct {
@@ -96,9 +101,9 @@ func (s *Server) Query(ctx context.Context, req *pbdns.QueryRequest) (*pbdns.Que
 
 	switch req.GetProtocol() {
 	case pbdns.Protocol_TCP:
-		local = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8502}
+		local = &net.TCPAddr{IP: s.LocalAddress.IP, Port: s.LocalAddress.Port}
 	case pbdns.Protocol_UDP:
-		local = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8502}
+		local = &net.UDPAddr{IP: s.LocalAddress.IP, Port: s.LocalAddress.Port}
 	default:
 		return nil, fmt.Errorf("error protocol type: %v", req.GetProtocol())
 	}

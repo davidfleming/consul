@@ -907,7 +907,7 @@ func (a *Agent) listenAndServeDNS() error {
 	grpcDNS.NewServer(grpcDNS.Config{
 		Logger:       a.logger.Named("grpc-api.dns"),
 		DNSServeMux:  s.mux,
-		LocalAddress: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: a.config.GRPCPort}, // todo: need a better way to do this
+		LocalAddress: grpcDNS.Local{IP: net.IPv4(127, 0, 0, 1), Port: a.config.GRPCPort}, // todo: need a better way to do this
 	}).Register(a.externalGRPCServer)
 
 	a.dnsServers = append(a.dnsServers, s)
