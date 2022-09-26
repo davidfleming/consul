@@ -10,9 +10,9 @@ service DNSService {
 }
 
 enum Protocol {
-    UNSET = 0;
-    TCP = 1;
-    UDP = 2;
+  UNSET = 0;
+  TCP = 1;
+  UDP = 2;
 }
 
 message QueryRequest {
