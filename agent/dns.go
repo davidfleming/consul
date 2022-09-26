@@ -65,7 +65,7 @@ const (
 	// to this amount to ensure that consul does respond. Previously if consumer had a larger buffer
 	// size than 65535 - 68 bytes(for header) consul would fail to respond and the consumer timesout
 	// the request.
-	maxUDPDatagramSize = 65475
+	maxUDPDatagramSize = 65467
 )
 
 type dnsSOAConfig struct {
