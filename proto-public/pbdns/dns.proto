@@ -9,9 +9,17 @@ service DNSService {
   rpc Query(QueryRequest) returns (QueryResponse) {}
 }
 
+enum Protocol {
+    UNSET = 0;
+    TCP = 1;
+    UDP = 2;
+}
+
 message QueryRequest {
   // msg is the DNS request message.
   bytes msg = 1;
+  // protocol is the protocol of the request
+  Protocol protocol = 2;
 }
 
 message QueryResponse {

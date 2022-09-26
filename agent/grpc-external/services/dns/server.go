@@ -92,8 +92,19 @@ func (s *Server) Query(ctx context.Context, req *pbdns.QueryRequest) (*pbdns.Que
 		return nil, fmt.Errorf("error retrieving peer information from context")
 	}
 
+	var local net.Addr
+
+	switch req.GetProtocol() {
+	case pbdns.Protocol_TCP:
+		local = &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8502}
+	case pbdns.Protocol_UDP:
+		local = &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8502}
+	default:
+		return nil, fmt.Errorf("error protocol type: %v", req.GetProtocol())
+	}
+
 	respWriter := &BufferResponseWriter{
-		LocalAddress:  s.LocalAddress,
+		LocalAddress:  local,
 		RemoteAddress: pr.Addr,
 		Logger:        s.Logger,
 	}

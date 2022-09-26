@@ -537,6 +537,7 @@ func (d *DNSServer) handleQuery(resp dns.ResponseWriter, req *dns.Msg) {
 	if err := resp.WriteMsg(m); err != nil {
 		d.logger.Warn("failed to respond", "error", err)
 	}
+	d.logger.Info("I responded :( ")
 }
 
 func (d *DNSServer) soa(cfg *dnsConfig, questionName string) *dns.SOA {
